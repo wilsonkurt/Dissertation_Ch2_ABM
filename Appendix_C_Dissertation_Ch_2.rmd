@@ -1,0 +1,875 @@
+---
+title: "Appendix C: Supplemental_Material_R_Code"
+author: "Kurt M. Wilson, Kasey E. Cole, Brian F. Codding"
+date: "5/6/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+This supplement provides the analysis code for Chapter 2  "IDENTIFYING KEY SOCIOECOLOGICAL FACTORS INFLUENCING THE EXPRESSION OF EGALITARIANISM AND INEQUALITY AMONG FORAGERS" in the University of Utah PhD Dissertation "THE ECOLOGY OF INEQUALITY: ASSESSING ENVIRONMENTAL INFLUENCE ON TRADEOFFS FOR DIFFERENTIAL RESOURCE ACCESS" by Kurt M. Wilson. Code here was developed by Kurt M. Wilson, Kasey E. Cole, and Brian F. Codding. For questions about the code, please contact Kurt M. Wilson at kurt.wilson@utah.edu.
+
+
+First, load the package libraries used in the analysis:
+```{r, warning = FALSE, message = FALSE}
+#Plotting
+library(scales)
+library(viridis)
+
+#Analysis
+library(randomForest)
+library(pdp)
+library(vip)
+library(spm)
+
+#Ethnographic Proxies
+library(binford)
+library(raster)
+library(readxl)
+```
+
+### Read in the Data
+Read in the data. We have 100 iterations of every combination of parameter values.
+```{r}
+#Read in the data with 100 iterations of every parameter combination
+dat <- read.csv("Appendix_D_ABM_Output_Data.csv")
+
+#Read in the supplemental data for the defense cost broad sensitivity analysis
+dat.defcost.sens <- read.csv("Defcost_sensitivity.csv")
+
+#Read in the supplemental data for the leader-patron kickback / joining cost broad sensitivity analysis
+dat.lpcost.sens <- read.csv("LPcost_sensitivity.csv")
+
+head(dat)
+```
+
+### Prep the data
+All of the predictor variables (heterogeneity, predictability, abundance, max allee size, and defense cost) are ordinal. Ascending in order increases the theoretical expectation of territoriality for heterogeneity, predictability, and the economy of scale. Ascending in order decreases the theoretical expectation of territoriality for abundance and defense cost.
+
+Therefore we re-code all variables as ordinal values.
+```{r}
+
+#For this analysis we are holding population at the mid-point to focus on the influence of resource characteristics, but population can be added in at any time if we want (just run more simulations)
+dat$Pop.ord <- factor(dat$Population, order = TRUE,
+                              levels = c("Mid"))
+
+dat$Het.ord <- factor(dat$Heterogeneity, order = TRUE, 
+                              levels = c("Little Heterogeneity", "Some Heterogeneity", "High Heterogeneity"))
+
+dat$Pred.ord <- factor(dat$Predictability, order = TRUE,
+                              levels = c("Not_Predictable", "Somewhat_Predictable", "Completely_Predictable"))
+
+dat$Abun.ord <- factor(dat$Abundance, order = TRUE,
+                              levels = c("Low Abundance", "Mid Abundance", "High Abundance"))
+
+dat$Allee.ord <- factor(dat$Allee.Effect, order = TRUE,
+                              levels = c("Small", "Medium", "Large"))
+
+dat$Def.ord <- factor(dat$Defense.Cost, order = TRUE,
+                              levels = c(3,7,11))
+
+
+head(dat)
+
+
+```
+
+We have now added ordinally ranked versions of each variable to the dataset.
+
+We can look at the distribution in the response variable (proportion of agents employing the unequal access strategy) across the 243 unique parameter combinations.
+```{r}
+mean_by_combo <- aggregate(dat$mean.proportion_UA, by = c(list(dat$Heterogeneity), list(dat$Predictability), list(dat$Abundance), list(dat$Allee.Effect), list(dat$Defense.Cost)), simplify = TRUE, FUN = mean)
+
+plot(mean_by_combo$x, ylab = "Proportion Unequal", pch = 19, xlab = "Parameter Combination", col = alpha("grey60", 0.4))
+```
+
+Supplemental Figure 1. Aggregated proportion of agents employing the unequal access strategy for each unique parameter combination (n = 243) shows significant variation dependent upon parameter combination. Each point in the plot represents the mean proprotion of agents employing the unequal access strategy from 100 iterations of the unique parameter combination.
+
+We can also look at the distribution of unequal and egalitarian outcomes:
+```{r}
+#png("Figure_1_hist.png", width = 4, height = 4, units = "in", res = 300)
+par(pty = "s", mar = c(4,4,2,2))
+hist(dat$mean.proportion_UA, breaks = 10, main = "", xlab = "Proportion of Unequal Agents", col = "grey60", ylab = "No. Runs", ylim = c(0, 8000))
+#dev.off()
+```
+
+Figure 1. Histogram of the mean proportion of agents employing the unequal strategy by model run (0 = all egalitarian and 1 = all non-egalitarian). The results present a strongly bi-modal distribution.
+
+### Sensitivity Analyses
+Both the cost to defend and the amount of resources given up to the leader / patron in the model do not have comparable cross-cultural values. Therefore, to better capture their impact on the model, we run two broad sensitivity analyses varying the defense cost and the leader/patron kickback values across a wide range when all other variables are held constant at their mid-value. We run 100 iterations of the model for each leader / patron value and each defense cost value.
+
+The sensitivity analysis on the leader/patron kickback value is based on the joining cost from the Greene and Stamps 2001 Ideal Free Distribution equation 2.For defense cost we vary the cost of defense from 0.1 up to 15, representing a single agent defending the average patch losing 0.1 suitability up to losing 15 suitability. As the average patch has a suitability of 1, this becomes a net return on the average patch of 0.9 down to -14, representing a range of minimal to very costly defense.
+```{r}
+#Using leader/patron kickback values from 1% of suitability up to 20% suitability (with all other variables held at their mid value) we get the average proportion of agents employing the unequal access strategy over 200 ticks.
+LP.cost.agg <- aggregate(dat.lpcost.sens$mean.proportion_UA ~ dat.lpcost.sens$Leader.Patron_Cost, simplify = TRUE, FUN = "mean")
+
+#Using all defense costs (with all other variables held at their mid value) we get the average proportion of agents employing the unequal access strategy over 200 ticks.
+def.cost.agg <- aggregate(dat.defcost.sens$mean.proportion_UA ~ dat.defcost.sens$Defense.Cost, simplify = TRUE, FUN = "mean")
+
+#Generate the Figure
+#png("Figure_4_sensitivity.png", height = 4, width = 4, units = "in", res = 150)
+par(pty = "s", mfrow = c(1,2), oma = c(2,3,2,0),mar = c(0.6,0.6,0.6,0.6), xpd = TRUE)
+plot(LP.cost.agg$`dat.lpcost.sens$mean.proportion_UA` ~ LP.cost.agg$`dat.lpcost.sens$Leader.Patron_Cost`, pch = 16, xlab = "", ylab = "", xlim = c(0,0.20), ylim = c(0,1), yaxt = "n", xaxt = "n", cex = 0.75)
+mtext("Proportion Unequal", side = 2, line = 2, cex = 0.75)
+mtext("Leader/Patron Cost", side = 1, line = 2, cex = 0.75)
+axis(2, at = seq(0,1,0.25), labels = seq(0,1,0.25), tick = TRUE, cex.axis = 0.75)
+axis(1, at = seq(0.00,0.20,0.05), labels = c("0.00", "", "0.10", "", "0.20"), tick = TRUE, cex.axis = 0.75)
+text(x = 0.005, y = 0.01, label = "a)", cex = 0.6)
+plot(def.cost.agg$`dat.defcost.sens$mean.proportion_UA` ~ def.cost.agg$`dat.defcost.sens$Defense.Cost`, pch = 19, xlab = "", ylab = "", ylim = c(0,1), yaxt = "n", xaxt = "n", cex = 0.75)
+text(x = 0.45, y = 0.01, label = "b)", cex = 0.6)
+mtext("Cost to Defend", side = 1, line = 2, cex = 0.75)
+axis(1, at = seq(0,15,5), labels = seq(0,15,5), tick = TRUE, cex.axis = 0.75)
+#dev.off()
+```
+
+Figure 4. A) Changing the amount of suitability given up to a leader / patron by each individual subordinate performs as may be expected. If subordinates lose less suitability to gain the benefits of the patch, more agents employ the unequal access strategy. However as that cost increases (i.e., it becomes more exploitative), the proportion of agents employing the unequal access strategy drops significantly and favors egalitarian outcomes. For the model runs analyzed for the main portion of the manuscript, we use a value of 0.10. This means unequal access strategy agents will always favor a minimum of 1 person beyond the optimal size on the average patch (suitability of 1) and more than 1 extra agent on better patches. A value of 0.10 also is chosen to represent what may be a reasonable mid-value for the amount of resources given to a leader or exploited by a patron without having agents attempt to optimize those values. B) Varying the cost to defend has some pretty strong impacts on the proportion of agents who employ the unequal access versus egalitarian strategies. This is to be expected, as when it is costly to defend we would not expect defending to commonly be favored and vice versa. However, outside of the more extreme values of the range (i.e., from ~3 to ~11) we see some fairly significant variation in outcomes. This suggests that between the extreme ranges of the cost to defend a resource other characteristics of the resource are likely to be highly influential in determining the optimal strategy. We explore these ranges more below.
+
+### Regression Analysis
+The distribution above however does not identify which parameter combinations favor unequal access the most, and in what manners. To assess how the proportion of individuals employing an unequal (or free) strategy varies with resource characteristics we implement an additional analysis.
+
+Given that we have 243 unique parameter combinations, it can be difficult to identify how each of the variables influences the outcome strategy and how they interact. To help understand the biggest trends, we implement random forest regression.
+
+First, select the just the ordinal predictors and the mean proportion of individuals employing unequal access
+```{r}
+var.names <- c("mean.proportion_UA", "Het.ord", "Pred.ord", "Abun.ord", "Allee.ord", "Def.ord")
+pred.vars <- dat[var.names]
+
+```
+
+Next, for regression purposes, we make each ordinal variable numeric. Each of our ordinal variables are implemented numerically in the agent-based model. We favor here the numeric ordination 1, 2, 3 to represent low, mid, and high values for each variable rather than their value from the ABM as we are not interested in predicting how, for instance, specific values of net primary productivity impact agent decisions but rather in general how decisions are influenced when there is little (or low), some, or high abundance of resources in an environment.
+```{r}
+pred.vars$Het.ord <- as.numeric(pred.vars$Het.ord)
+pred.vars$Pred.ord <- as.numeric(pred.vars$Pred.ord)
+pred.vars$Abun.ord <- as.numeric(pred.vars$Abun.ord)
+pred.vars$Allee.ord <- as.numeric(pred.vars$Allee.ord)
+pred.vars$Def.ord <- as.numeric(pred.vars$Def.ord)
+```
+
+Then run a RF Regression analysis to determine how well the 5 resource characteristic variables predict the proportion of individuals employing an unequal access strategy:
+```{r}
+#Run the RF model
+set.seed(18)#set.seed for replicability
+rf.UA <- randomForest(mean.proportion_UA ~ ., #predict proportion using all of the predictor variables
+                      type = "regression", #specify we are doing regression
+                      data = pred.vars, #use all of the resource characteristic variables from our pred.vars object
+                      importance = TRUE, #record variable importance
+                      localImp = TRUE, #record local variable importance (the importance of each variable to the outcome of each model run)
+                      mtry = 2, #try to split using 2 variables at each split
+                      nodesize = 5)#5 for regression
+
+```
+
+Now, see how the initial model has performed:
+```{r}
+rf.UA
+```
+
+The model looks like it is performing well. We explain 86.89% of the variance in the proportion of individuals employing the unequal access strategy. 
+
+Next check for normalcy in the model residuals:
+```{r}
+rf.UA.residuals <- pred.vars$mean.proportion_UA - rf.UA$predicted #calculate the residuals as observed - predicted
+
+#plot the residuals
+par(pty="s")
+hist(rf.UA.residuals, col="grey", main=NA, xlab="Residuals")
+```
+
+Supplemental Figure 4. Model residuals. The model's residuals are normally distributed around zero, suggesting the model is trustworthy.
+
+Next, implement cross-validation to better capture how well the model performs:
+```{r}
+#Run cross-validation to check how the model performs
+set.seed(18)
+rf.UA.cv <- RFcv(trainx = pred.vars[,-1],#remove the response variable from the dataset & keep the predictors
+                    trainy = pred.vars[,1],#remove the predictors and keep the response variable
+                    mtry = 2, #try to split using 2 variables at each split
+                    min.node.size = 5, #5 for regression
+                    cv.fold = 10) #do 10 fold cross-validation
+
+rf.UA.cv$rmse
+rf.UA.cv$vecv
+```
+
+Cross validated RMSE is 0.14 and variance explained is 87.02, suggesting the model does very well in explaining the mean proportion of individuals employing the unequal access strategy.
+
+We now look at the variable importance to get a sense of which variables have the greatest impact on explaining the mean proportion of individuals employing the unequal access strategy.
+```{r}
+#importance from the randomForest package
+impToPlot1 <- importance(rf.UA, type = 1)#% increase in MSE
+impToPlot2 <- importance(rf.UA, type = 2)#Increase in node purity
+
+#plot the importance
+
+#png("Figure1_varimp.png", width = 8, height = 4.5, units = "in", res = 150)
+
+par(mfrow = c(1,2), pty = "s", oma = c(1,1,0,1), mar = c(0.5,0.5,0.5,0.5))
+dotchart(sort(impToPlot1[,1]), xlab = "% Increase in MSE", labels = rev(c("Defense Cost", "Predictability", "Abundance", "Heterogeneity", "Econ. of Scale")), ylab = "", pch = 19)
+dotchart(sort(impToPlot2[,1]), xlim = c(0, 2000), xlab = "Increase in Node Purity", labels = rev(c("Defense Cost", "Predictability", "Heterogeneity", "Abundance", "Econ. of Scale")), ylab = "", pch = 19)
+
+#dev.off()  
+
+
+```
+
+Figure 1. Variable importance. Defense cost has a much larger impact than the other variables, with all other variables having a fairly similar impact on the mean proportion of individuals employing the unequal access strategy. This result is not surprising. A priori, we expect the defense cost variable to be highly important. If it costs almost nothing to defend we would generally expect defense and if it is very costly to defend we would generally expect free access. Defense cost is also an agglomerate value that represents a combination of a minimum of 6 possible aspects of resources (how storable they are, their within patch patchiness, how reliant the resource is on production tools, how much space is required to be defended to rely upon the resource, the opportunity cost imposed by defending the resource, the value of 1 unit of resource to a person who has it and someone who doesn't, and possibly more). Thus, the fact that defense cost is a highly influential variable is expected. 
+
+We can visualize how defense cost influences the predicted outcome when each other variable is held at its low, mid, and high value respectively via partial dependence.
+
+To do so, first we sequentially sort the levels of each predictor variable:
+```{r}
+#First, we need to generate a vector of the levels of each predictor variable, sorted sequentially (sorting is necessary)
+het_vect <- sort(unique(pred.vars$Het.ord))
+pred_vect <- sort(unique(pred.vars$Pred.ord))
+abun_vect <- sort(unique(pred.vars$Abun.ord))
+allee_vect <- sort(unique(pred.vars$Allee.ord))
+def_vect <- sort(unique(pred.vars$Def.ord))
+
+#Second, we need to grab the number of levels in each predictor category
+n_het <- length(het_vect)
+n_pred <- length(pred_vect)
+n_abun <- length(abun_vect)
+n_allee <- length(allee_vect)
+n_def <- length(def_vect)
+
+#Third, we make a vector of the labels for each variable's levels
+het_labels <- levels(dat$Het.ord)
+pred_labels <- levels(dat$Pred.ord)
+abun_labels <- levels(dat$Abun.ord)
+allee_labels <- levels(dat$Allee.ord)
+def_labels <- levels(dat$Def.ord)
+```
+
+Then we generate the partial response of defense cost:
+```{r}
+#make a color vector for plotting
+color_vect <- c("#60CEACFF", "#357BA2FF", "#382A54FF")
+
+
+#png("Figure2_defcost_partial.png", width = 5, height = 5, units = "in", res = 150)
+
+#make an empty plot
+par(pty = "s")
+plot(NA, xlab = "Defense Cost", ylab = "Proportion Unequal", ylim = c(-.10, 1.1), xlim = c(1, n_def), xaxt = "n", yaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+axis(side = 2, at = seq(0,1,0.25), labels = c(0,.25,.5,.75,1))
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"), las = 2)
+legend("bottomleft", legend = c("Most", "Mid", "Least"), lty = 1, lwd = 2, col = rev(color_vect), bty = "n", cex = 0.75)
+
+#add lines that are the predicted partial response
+for (i in 1:n_def) {
+  pred.by.def <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_def),
+                                              "Pred.ord" = rep(pred_vect[i], n_def),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_def),
+                                              "Allee.ord" = rep(allee_vect[i], n_def),
+                                              "Def.ord" = def_vect
+                                             )
+                         )
+  lines(seq(1, n_def), pred.by.def, col = color_vect[i], lwd = 2)
+}
+
+#dev.off()
+```
+
+Figure 2. Partial response plot for defense cost when all other variables are held at their least (teal), mid (blue), and most (purple) likely to promote unequal access values. What we can see is that when unequal access is least theoretically likely (high abundance, low heterogeneity, low economy of scale, no predictability) a low defense cost (easy to defend) still favors nearly 50% of individuals employing an unequal access strategy. As defense cost increases the proportion employing unequal access drops significantly. The same pattern, but more pronounced, is present when all other variables are held at their mid-values. When all other variables are most theoretically likely to promote unequal access (high heterogeneity, low abundance, high economy of scale, and complete predictability) we see that even high defense costs favor most individuals employing the unequal accesss strategy, with nearly everyone employing it if defense cost lowers.
+
+As shown above, we expect that resources will exist on a defense cost continuum, with some more and some less defensible. Therefore we next explore how the other characteristics of a resource influence whether people relying on it are more or less likley to employ free or unequal access dependent on the defense cost. To determine how a change in each variable (increasing or decreasing its value) impacts the likelihood that a run will end in UA or not UA strategies, we calculate the partial dependence of each variable on the regression outcome. We calculate 12 distinct partial dependence responses, demonstrating how each level of each of our heterogeneity, predictability, abundance, and economy of scale variables impacts the proportion of individuals employing unequal access when all other variables are held at their low, middle, and high levels respectively. We do this for when defense cost is low (easy to defend), mid (somewhat defendable), and high (hard to defend)
+
+First we generate the partial dependence as the change in the predicted proportion of individuals employing unequal access when defense cost is in the middle.
+```{r}
+
+
+par(mfrow = c(2,2), pty = "s")
+
+#make an empty plot
+plot(NA, xlab = "Heterogeneity", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_het), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+
+#add lines that are the predicted partial response
+for (i in 1:n_het) {
+  pred.by.het <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = het_vect,
+                                              "Pred.ord" = rep(pred_vect[i], n_het),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_het),
+                                              "Allee.ord" = rep(allee_vect[i], n_het),
+                                              "Def.ord" = rep(def_vect[2], n_het)
+                                             )
+                         )
+  lines(seq(1, n_het), pred.by.het, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Predictability", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_pred), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+legend(x = 2, y = 0.5, legend = c("Least", "Mid", "Most"), lty = 1, col = color_vect, bty = "n", cex = 0.5)
+
+#add lines that are the predicted partial response
+for (i in 1:n_pred) {
+  pred.by.pred <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_pred),
+                                              "Pred.ord" = pred_vect,
+                                              "Abun.ord" = rep(abun_vect[4-i], n_pred),
+                                              "Allee.ord" = rep(allee_vect[i], n_pred),
+                                              "Def.ord" = rep(def_vect[2], n_pred)
+                                             )
+                         )
+  lines(seq(1, n_pred), pred.by.pred, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Abundance", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_abun), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"), las = 2)
+
+#add lines that are the predicted partial response
+for (i in 1:n_abun) {
+  pred.by.abun <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_abun),
+                                              "Pred.ord" = rep(pred_vect[i], n_abun),
+                                              "Abun.ord" = abun_vect,
+                                              "Allee.ord" = rep(allee_vect[i], n_abun),
+                                              "Def.ord" = rep(def_vect[2], n_abun)
+                                             )
+                         )
+  lines(seq(1, n_abun), pred.by.abun, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Econ. of Scale", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_allee), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"), las = 2)
+
+#add lines that are the predicted partial response
+for (i in 1:n_allee) {
+  pred.by.allee <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_allee),
+                                              "Pred.ord" = rep(pred_vect[i], n_allee),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_allee),
+                                              "Allee.ord" = allee_vect,
+                                              "Def.ord" = rep(def_vect[2], n_allee)
+                                             )
+                         )
+  lines(seq(1, n_allee), pred.by.allee, col = color_vect[i], lwd = 2)
+}
+
+
+
+
+
+
+```
+
+Supplemental Figure 5. Partial dependence when defense cost is held at its mid-value and all other variables are held respectively at their least (teal), mid (blue), and most (purple) likely to promote unequal access values.
+
+Next we can look at when defense cost is higher, so it is harder to defend.
+```{r}
+
+
+par(mfrow = c(2,2), pty = "s")
+
+#make an empty plot
+plot(NA, xlab = "Heterogeneity", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_het), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+
+#add lines that are the predicted partial response
+for (i in 1:n_het) {
+  pred.by.het <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = het_vect,
+                                              "Pred.ord" = rep(pred_vect[i], n_het),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_het),
+                                              "Allee.ord" = rep(allee_vect[i], n_het),
+                                              "Def.ord" = rep(def_vect[3], n_het)
+                                             )
+                         )
+  lines(seq(1, n_het), pred.by.het, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Predictability", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_pred), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+legend("topleft", legend = c("Least", "Mid", "Most"), lty = 1, col = color_vect, bty = "n", cex = 0.5)
+
+#add lines that are the predicted partial response
+for (i in 1:n_pred) {
+  pred.by.pred <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_pred),
+                                              "Pred.ord" = pred_vect,
+                                              "Abun.ord" = rep(abun_vect[4-i], n_pred),
+                                              "Allee.ord" = rep(allee_vect[i], n_pred),
+                                              "Def.ord" = rep(def_vect[3], n_pred)
+                                             )
+                         )
+  lines(seq(1, n_pred), pred.by.pred, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Abundance", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_abun), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"), las = 2)
+
+#add lines that are the predicted partial response
+for (i in 1:n_abun) {
+  pred.by.abun <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_abun),
+                                              "Pred.ord" = rep(pred_vect[i], n_abun),
+                                              "Abun.ord" = abun_vect,
+                                              "Allee.ord" = rep(allee_vect[i], n_abun),
+                                              "Def.ord" = rep(def_vect[3], n_abun)
+                                             )
+                         )
+  lines(seq(1, n_abun), pred.by.abun, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Econ. of Scale", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_allee), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"), las = 2)
+
+#add lines that are the predicted partial response
+for (i in 1:n_allee) {
+  pred.by.allee <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_allee),
+                                              "Pred.ord" = rep(pred_vect[i], n_allee),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_allee),
+                                              "Allee.ord" = allee_vect,
+                                              "Def.ord" = rep(def_vect[3], n_allee)
+                                             )
+                         )
+  lines(seq(1, n_allee), pred.by.allee, col = color_vect[i], lwd = 2)
+}
+
+
+
+
+```
+
+Supplemental Figure 6. Partial dependence when defense cost is held at its high-value (hard to defend) and all other variables are held respectively at their least (teal), mid (blue), and most (purple) likely to promote unequal access values.
+
+Finally, we look at the partial responses when defense is held at its low (easiest to defend) level.
+```{r}
+
+
+par(mfrow = c(2,2), pty = "s")
+
+#make an empty plot
+plot(NA, xlab = "Heterogeneity", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_het), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+
+#add lines that are the predicted partial response
+for (i in 1:n_het) {
+  pred.by.het <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = het_vect,
+                                              "Pred.ord" = rep(pred_vect[i], n_het),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_het),
+                                              "Allee.ord" = rep(allee_vect[i], n_het),
+                                              "Def.ord" = rep(def_vect[1], n_het)
+                                             )
+                         )
+  lines(seq(1, n_het), pred.by.het, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Predictability", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_pred), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+legend("bottomright", legend = c("Least", "Mid", "Most"), lty = 1, col = color_vect, bty = "n", cex = 0.5)
+
+#add lines that are the predicted partial response
+for (i in 1:n_pred) {
+  pred.by.pred <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_pred),
+                                              "Pred.ord" = pred_vect,
+                                              "Abun.ord" = rep(abun_vect[4-i], n_pred),
+                                              "Allee.ord" = rep(allee_vect[i], n_pred),
+                                              "Def.ord" = rep(def_vect[1], n_pred)
+                                             )
+                         )
+  lines(seq(1, n_pred), pred.by.pred, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Abundance", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_abun), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"), las = 2)
+
+#add lines that are the predicted partial response
+for (i in 1:n_abun) {
+  pred.by.abun <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_abun),
+                                              "Pred.ord" = rep(pred_vect[i], n_abun),
+                                              "Abun.ord" = abun_vect,
+                                              "Allee.ord" = rep(allee_vect[i], n_abun),
+                                              "Def.ord" = rep(def_vect[1], n_abun)
+                                             )
+                         )
+  lines(seq(1, n_abun), pred.by.abun, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "Econ. of Scale", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_allee), xaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"), las = 2)
+
+#add lines that are the predicted partial response
+for (i in 1:n_allee) {
+  pred.by.allee <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_allee),
+                                              "Pred.ord" = rep(pred_vect[i], n_allee),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_allee),
+                                              "Allee.ord" = allee_vect,
+                                              "Def.ord" = rep(def_vect[1], n_allee)
+                                             )
+                         )
+  lines(seq(1, n_allee), pred.by.allee, col = color_vect[i], lwd = 2)
+}
+
+
+
+```
+
+Supplemental Figure 7. Partial dependence when defense cost is held at its low-value (easy to defend) and all other variables are held respectively at their least (teal), mid (blue), and most (purple) theoretically likely to promote unequal access values.
+
+Next compile the complete partial dependence plots figure
+```{r}
+#png("Figure_3_partials.png", width = 8, height = 6, units = "in", res = 150)
+
+par(mfrow = c(3,4),
+    oma = c(5,6,0,2),
+    mar = c(0.6,0.6,0.6,0.6),
+    pty = "s")
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_het), xaxt = "n", yaxt = "n")
+axis(2, at = seq(0,1,0.25), tick = TRUE, labels = c(0,.25,.5,.75,1))
+mtext("Hard to Defend", side = 2, line = 5, cex = 0.75)
+mtext("Proportion Unequal", side = 2, line = 3, cex = 0.65)
+text(x = 1.05, y = -0.05, "a)", cex = 0.85)
+
+#add lines that are the predicted partial response
+for (i in 1:n_het) {
+  pred.by.het <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = het_vect,
+                                              "Pred.ord" = rep(pred_vect[i], n_het),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_het),
+                                              "Allee.ord" = rep(allee_vect[i], n_het),
+                                              "Def.ord" = rep(def_vect[3], n_het)
+                                             )
+                         )
+  lines(seq(1, n_het), pred.by.het, col = color_vect[i], lwd = 2)
+}
+
+#par(mar = c(0,1,1,1))
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_pred), xaxt = "n", yaxt = "n")
+text(x = 1.05, y = -0.05, "b)", cex = 0.85)
+
+#add lines that are the predicted partial response
+for (i in 1:n_pred) {
+  pred.by.pred <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_pred),
+                                              "Pred.ord" = pred_vect,
+                                              "Abun.ord" = rep(abun_vect[4-i], n_pred),
+                                              "Allee.ord" = rep(allee_vect[i], n_pred),
+                                              "Def.ord" = rep(def_vect[3], n_pred)
+                                             )
+                         )
+  lines(seq(1, n_pred), pred.by.pred, col = color_vect[i], lwd = 2)
+}
+
+#par(mar = c(0,1,1,1))
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_abun), xaxt = "n", yaxt = "n")
+text(x = 1.05, y = -0.05, "c)", cex = 0.85)
+
+#add lines that are the predicted partial response
+for (i in 1:n_abun) {
+  pred.by.abun <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_abun),
+                                              "Pred.ord" = rep(pred_vect[i], n_abun),
+                                              "Abun.ord" = abun_vect,
+                                              "Allee.ord" = rep(allee_vect[i], n_abun),
+                                              "Def.ord" = rep(def_vect[3], n_abun)
+                                             )
+                         )
+  lines(seq(1, n_abun), pred.by.abun, col = color_vect[i], lwd = 2)
+}
+
+#par(mar = c(0,1,1,1))
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_allee), xaxt = "n", yaxt = "n")
+text(x = 1.05, y = -0.05, "d)", cex = 0.85)
+
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"))
+#add lines that are the predicted partial response
+for (i in 1:n_allee) {
+  pred.by.allee <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_allee),
+                                              "Pred.ord" = rep(pred_vect[i], n_allee),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_allee),
+                                              "Allee.ord" = allee_vect,
+                                              "Def.ord" = rep(def_vect[3], n_allee)
+                                             )
+                         )
+  lines(seq(1, n_allee), pred.by.allee, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_het), xaxt = "n", yaxt = "n")
+axis(2, at = seq(0,1,0.25), tick = TRUE, labels = c(0,.25,.5,.75,1))
+text(x = 1.05, y = -0.05, "e)", cex = 0.85)
+
+mtext("Mid to Defend", side = 2, line = 5, cex = 0.75)
+mtext("Proportion Unequal", side = 2, line = 3, cex = 0.65)
+
+#add lines that are the predicted partial response
+for (i in 1:n_het) {
+  pred.by.het <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = het_vect,
+                                              "Pred.ord" = rep(pred_vect[i], n_het),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_het),
+                                              "Allee.ord" = rep(allee_vect[i], n_het),
+                                              "Def.ord" = rep(def_vect[2], n_het)
+                                             )
+                         )
+  lines(seq(1, n_het), pred.by.het, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_pred), xaxt = "n", yaxt = "n")
+text(x = 1.05, y = -0.05, "f)", cex = 0.85)
+
+#add lines that are the predicted partial response
+for (i in 1:n_pred) {
+  pred.by.pred <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_pred),
+                                              "Pred.ord" = pred_vect,
+                                              "Abun.ord" = rep(abun_vect[4-i], n_pred),
+                                              "Allee.ord" = rep(allee_vect[i], n_pred),
+                                              "Def.ord" = rep(def_vect[2], n_pred)
+                                             )
+                         )
+  lines(seq(1, n_pred), pred.by.pred, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_abun), xaxt = "n", yaxt = "n")
+text(x = 1.05, y = -0.05, "g)", cex = 0.85)
+
+#add lines that are the predicted partial response
+for (i in 1:n_abun) {
+  pred.by.abun <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_abun),
+                                              "Pred.ord" = rep(pred_vect[i], n_abun),
+                                              "Abun.ord" = abun_vect,
+                                              "Allee.ord" = rep(allee_vect[i], n_abun),
+                                              "Def.ord" = rep(def_vect[2], n_abun)
+                                             )
+                         )
+  lines(seq(1, n_abun), pred.by.abun, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_allee), xaxt = "n", yaxt = "n")
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"))
+text(x = 1.05, y = -0.05, "h)", cex = 0.85)
+
+#add lines that are the predicted partial response
+for (i in 1:n_allee) {
+  pred.by.allee <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_allee),
+                                              "Pred.ord" = rep(pred_vect[i], n_allee),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_allee),
+                                              "Allee.ord" = allee_vect,
+                                              "Def.ord" = rep(def_vect[2], n_allee)
+                                             )
+                         )
+  lines(seq(1, n_allee), pred.by.allee, col = color_vect[i], lwd = 2)
+}
+
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "Proportion UA", ylim = c(-.10, 1.1), xlim = c(1, n_het), xaxt = "n", yaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+axis(2, at = seq(0,1,0.25), tick = TRUE, labels = c(0,.25,.5,.75,1))
+mtext("Easy to Defend", side = 2, line = 5, cex = 0.75)
+mtext("Heterogeneity", side = 1, line = 3, cex = 0.75)
+mtext("Proportion Unequal", side = 2, line = 3, cex = 0.65)
+text(x = 1.05, y = -0.05, "i)", cex = 0.85)
+
+
+#add lines that are the predicted partial response
+for (i in 1:n_het) {
+  pred.by.het <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = het_vect,
+                                              "Pred.ord" = rep(pred_vect[i], n_het),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_het),
+                                              "Allee.ord" = rep(allee_vect[i], n_het),
+                                              "Def.ord" = rep(def_vect[1], n_het)
+                                             )
+                         )
+  lines(seq(1, n_het), pred.by.het, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_pred), xaxt = "n", yaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+mtext("Predictability", side = 1, line = 3, cex = 0.75)
+text(x = 1.05, y = -0.05, "j)", cex = 0.85)
+
+#add lines that are the predicted partial response
+for (i in 1:n_pred) {
+  pred.by.pred <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_pred),
+                                              "Pred.ord" = pred_vect,
+                                              "Abun.ord" = rep(abun_vect[4-i], n_pred),
+                                              "Allee.ord" = rep(allee_vect[i], n_pred),
+                                              "Def.ord" = rep(def_vect[1], n_pred)
+                                             )
+                         )
+  lines(seq(1, n_pred), pred.by.pred, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_abun), xaxt = "n", yaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+mtext("Abundance", side = 1, line = 3, cex = 0.75)
+text(x = 1.05, y = -0.05, "k)", cex = 0.85)
+
+#add lines that are the predicted partial response
+for (i in 1:n_abun) {
+  pred.by.abun <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_abun),
+                                              "Pred.ord" = rep(pred_vect[i], n_abun),
+                                              "Abun.ord" = abun_vect,
+                                              "Allee.ord" = rep(allee_vect[i], n_abun),
+                                              "Def.ord" = rep(def_vect[1], n_abun)
+                                             )
+                         )
+  lines(seq(1, n_abun), pred.by.abun, col = color_vect[i], lwd = 2)
+}
+
+#make an empty plot
+plot(NA, xlab = "", ylab = "", ylim = c(-.10, 1.1), xlim = c(1, n_allee), xaxt = "n", yaxt = "n")
+axis(side = 1, at = c(1,2,3), c("Low", "Mid", "High"))
+#axis(side = 4, at = c(0,1), c("Free", "Unequal"))
+mtext("Econ. of Scale", side = 1, line = 3, cex = 0.75)
+text(x = 1.05, y = -0.05, "l)", cex = 0.85)
+legend("bottomright", legend = c("Most", "Mid", "Least"), lty = 1, col = rev(color_vect), bty = "n", cex = 0.75, lwd = 2)
+#add lines that are the predicted partial response
+for (i in 1:n_allee) {
+  pred.by.allee <- predict(rf.UA,
+                         newdata = data.frame("Het.ord" = rep(het_vect[i], n_allee),
+                                              "Pred.ord" = rep(pred_vect[i], n_allee),
+                                              "Abun.ord" = rep(abun_vect[4-i], n_allee),
+                                              "Allee.ord" = allee_vect,
+                                              "Def.ord" = rep(def_vect[1], n_allee)
+                                             )
+                         )
+  lines(seq(1, n_allee), pred.by.allee, col = color_vect[i], lwd = 2)
+}
+
+
+#dev.off()
+
+```
+
+Figure 3. Partial dependence responses for each resource characteristic at each level of defense cost.
+
+### Establish ethnographic proxy values for the resource characteristic variables
+First, make a subset of the Binford dataset with just the variables of interest
+```{r}
+
+binf.dat <- data.frame("Group" = LRB$groupno, "Name" = LRB$name, "SCCSID" = LRB$sccsid, "Tot.Pop" = LRB$tlpop, "Area.km" = LRB$area, "Group.Size" = LRB$group1, "Lat" = LRB$lati, "Lon" = LRB$long) 
+
+```
+
+Second, download the net primary productivity tiff file from the MODIS () work group following Wilson & Codding 20200
+```{r}
+#download.file("http://files.ntsg.umt.edu/data/NTSG_Products/MOD17/GeoTIFF/MOD17A3/GeoTIFF_30arcsec/MOD17A3_Science_NPP_mean_00_15.tif", "MOD17A3_Science_NPP_mean_00_15.tif", mode="wb") #download directly to the working directory 
+
+#NPP<-raster("MOD17A3_Science_NPP_mean_00_15.tif") #Read in the NPP mean raster
+
+#NPP[NPP[]==65535] <- 0 #the maximum value actually represents non-terrestrial ecosystems and should be replaced with 0 (note: this will take some time)
+
+#writeRaster(NPP, "MOD17A3_Science_NPP_mean_00_15_NA.tif", overwrite = TRUE) #once complete, write a new raster with this corrected
+NPP<-raster("MOD17A3_Science_NPP_mean_00_15_NA.tif") #once this has been done once, read in the correct file
+
+crs(NPP) #check the projection
+```
+
+Make spatial data for Binford data set to extract NPP values
+```{r}
+#Create the spatial dataframe
+binf.spat <- binf.dat
+
+#Convert data frame to SpatialPoints class
+coordinates(binf.spat) <- cbind(binf.spat$Lon, binf.spat$Lat)
+
+#Define as lat long in WGS84 to match MODIS NPP dataa
+proj4string(binf.spat) <- CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0") #crs = coordinate reference system
+
+```
+
+Extract raster values to points and generate NPP mean 50km, standard deviation 50km:
+```{r extract rastser npp values}
+#Note. This process will take some time.
+
+#NPP_SD<-extract(NPP, binf.spat, buffer=50000, fun=sd, cellnumbers=T, small=T, na.rm=T) #Extract the standard deviation in NPP in a 50km buffer around the societie's coordinates. 
+
+#NPP_Mean50km<-extract(NPP, binf.spat, buffer=50000, fun=mean, cellnumbers=T, small=T, na.rm=T) #Extract the mean NPP inside the 50km buffer for each society.
+```
+
+Save the results as a spreadsheet:
+```{r write table}
+
+#combine remote sensed data values with the SCCS variables
+#binf.dat <- cbind(binf.dat, NPP_SD, NPP_Mean50km)
+
+#write a new text file with the environmental NPP variables added to the other societal data
+#write.csv(binf.dat, file = "Binf.Dat.csv")
+
+```
+
+NPP SD and mean in 50km are now measured exactly the same for Hunter-gatherer groups from Binford as for those from SCCS via Wilson and Codding 2020. We take the SCCS societies that are foraging/fishing (to match with Binford) that aren't in Binford and add them to the binf.dat dataset. Then we use all of these societies to help set the heterogeneity and abundance variable values. We rely only on Binford for the allee size and population because the SCCS does not have comparable proxy variables. 
+```{r}
+binf.dat <- read.csv("Binf.dat.csv")
+
+sccs.dat <- read.csv("Supplemental_Data_Muoi.csv")#Supplemental Data from Wilson and Codding 2020 available at https://doi.org/10.1007/s12110-020-09383-4 
+
+#subset for foraging/fishing to match with Binford
+sccs.dat <- sccs.dat[which(sccs.dat$SCCS246 == "foraging" | sccs.dat$SCCS246 == "fishing"),] #46 societies
+
+#subset to remove societies also in Binford
+sccs.dat <- sccs.dat[which(sccs.dat$In.Bin != "Y"),]
+
+```
+
+Make a dataframe just for NPP SD and NPP Mean
+```{r}
+npp.dat <- binf.dat[,10:11]
+npp.dat <- rbind(npp.dat, sccs.dat[,14:15])
+```
+
+Get NPP standard deviation (50km) quantiles
+```{r}
+quantile(npp.dat$NPP_SD)
+```
+
+Get NPP mean (50km) quantiles
+```{r}
+quantile(npp.dat$NPP_Mean50km)
+```
+
+Get quantiles for smallest cooperating group size for economy of scale (Allee effect)
+```{r}
+quantile(binf.dat$Group.Size, na.rm = TRUE)
+```
+
+Get quantiles for total population (we hold population constant at the 50th quantile)
+```{r}
+quantile(binf.dat$Tot.Pop)
+```
+
